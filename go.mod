@@ -1,3 +1,3 @@
-module github.com/haxeye/submap
+module github.com/s3c-krd/submap
 
 go 1.26.6

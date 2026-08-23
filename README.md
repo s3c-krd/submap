@@ -6,12 +6,12 @@ Fast subdomain discovery CLI powered by 144 passive sources. Finds subdomains us
 
 ### From binary
 
-Download from [Releases](https://github.com/haxeye/submap/releases).
+Download from [Releases](https://github.com/s3c-krd/submap/releases).
 
 ### From source
 
 ```bash
-go install github.com/haxeye/submap@latest
+go install github.com/s3c-krd/submap@latest
 ```
 
 ## Prerequisites

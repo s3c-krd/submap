@@ -478,9 +478,6 @@ func main() {
 			} else {
 				if !silent && !jsonOut {
 					label := fmt.Sprintf("%d subdomains", result.Total)
-					if result.Cached {
-						label += " (cached)"
-					}
 					fmt.Fprintf(os.Stderr, "  %s\n", green(fmt.Sprintf("[%d/%d] %s — %s", num, len(domains), domain, label)))
 				}
 				if countOnly {

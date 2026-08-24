@@ -42,6 +42,12 @@ submap -dL targets.txt -o results.txt
 # Parallel scans
 submap -dL targets.txt -p 10
 
+# Resolve DNS records (A, AAAA, CNAME, MX, NS, TXT)
+submap -d uber.com -resolve
+
+# Resolve + JSON
+submap -d uber.com -resolve -json
+
 # Pipe to other tools
 submap -d uber.com -silent | httpx -silent
 echo "tesla.com" | submap -silent | nuclei
@@ -57,6 +63,7 @@ submap -d uber.com -count
 -dL <file>        File with domains (one per line)
 -o  <file>        Output file (default: stdout)
 -json             JSON output
+-resolve          Resolve DNS records (paid plans)
 -p  <n>           Parallel scans (default: 1, max: 20)
 -silent           Only print subdomains
 -count            Only print count

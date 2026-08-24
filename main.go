@@ -142,6 +142,7 @@ type ScanResult struct {
 	SubEntries []SubEntry           `json:"subdomains"`
 	DNS        map[string]DnsRecord `json:"-"`
 	Resolved   bool                 `json:"-"`
+	Truncated  bool                 `json:"-"`
 	Error      string               `json:"error,omitempty"`
 }
 
@@ -209,6 +210,7 @@ func (c *Client) Scan(domain string, resolve bool) (*ScanResult, error) {
 					TotalFound int  `json:"totalFound"`
 					Cached     bool `json:"cached"`
 					Resolved   bool `json:"resolved"`
+					Truncated  bool `json:"truncated"`
 					Results    []struct {
 						Subdomain string   `json:"subdomain"`
 						Redacted  bool     `json:"redacted"`
@@ -225,6 +227,7 @@ func (c *Client) Scan(domain string, resolve bool) (*ScanResult, error) {
 				result.Total = comp.TotalFound
 				result.Cached = comp.Cached
 				result.Resolved = comp.Resolved
+				result.Truncated = comp.Truncated
 				for _, r := range comp.Results {
 					if r.Subdomain != "" && !r.Redacted {
 						result.Subdomains = append(result.Subdomains, r.Subdomain)
@@ -550,7 +553,13 @@ func main() {
 				}
 			} else {
 				if !silent && !jsonOut {
-					label := fmt.Sprintf("%d subdomains", result.Total)
+					visible := len(result.Subdomains)
+					var label string
+					if result.Truncated {
+						label = fmt.Sprintf("%d subdomains (%d total, upgrade for full access)", visible, result.Total)
+					} else {
+						label = fmt.Sprintf("%d subdomains", result.Total)
+					}
 					if result.Resolved {
 						label += fmt.Sprintf(", %d resolved", len(result.DNS))
 					}

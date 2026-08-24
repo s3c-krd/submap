@@ -113,17 +113,45 @@ func (c *Client) Health() (map[string]interface{}, error) {
 	return c.json("GET", "/health", nil)
 }
 
-type ScanResult struct {
-	Domain     string   `json:"domain"`
-	Total      int      `json:"total"`
-	Cached     bool     `json:"cached"`
-	Subdomains []string `json:"subdomains"`
-	Error      string   `json:"error,omitempty"`
+type DnsRecord struct {
+	A     []string `json:"a,omitempty"`
+	AAAA  []string `json:"aaaa,omitempty"`
+	CNAME []string `json:"cname,omitempty"`
+	MX    []string `json:"mx,omitempty"`
+	NS    []string `json:"ns,omitempty"`
+	TXT   []string `json:"txt,omitempty"`
+	Live  bool     `json:"live"`
 }
 
-func (c *Client) Scan(domain string) (*ScanResult, error) {
+type SubEntry struct {
+	Subdomain string   `json:"subdomain"`
+	A         []string `json:"a,omitempty"`
+	AAAA      []string `json:"aaaa,omitempty"`
+	CNAME     []string `json:"cname,omitempty"`
+	MX        []string `json:"mx,omitempty"`
+	NS        []string `json:"ns,omitempty"`
+	TXT       []string `json:"txt,omitempty"`
+	Live      *bool    `json:"live,omitempty"`
+}
+
+type ScanResult struct {
+	Domain     string               `json:"domain"`
+	Total      int                  `json:"total"`
+	Cached     bool                 `json:"cached"`
+	Subdomains []string             `json:"-"`
+	SubEntries []SubEntry           `json:"subdomains"`
+	DNS        map[string]DnsRecord `json:"-"`
+	Resolved   bool                 `json:"-"`
+	Error      string               `json:"error,omitempty"`
+}
+
+func (c *Client) Scan(domain string, resolve bool) (*ScanResult, error) {
 	scanClient := &http.Client{Timeout: 10 * time.Minute}
-	req, err := http.NewRequest("GET", c.base+"/api/scan?domain="+url.QueryEscape(domain), nil)
+	scanURL := c.base + "/api/scan?domain=" + url.QueryEscape(domain)
+	if resolve {
+		scanURL += "&resolve=1"
+	}
+	req, err := http.NewRequest("GET", scanURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -147,7 +175,7 @@ func (c *Client) Scan(domain string) (*ScanResult, error) {
 		}
 	}
 
-	result := &ScanResult{Domain: domain}
+	result := &ScanResult{Domain: domain, DNS: make(map[string]DnsRecord)}
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
 	lastEvent := ""
@@ -165,21 +193,47 @@ func (c *Client) Scan(domain string) (*ScanResult, error) {
 				}
 				json.Unmarshal([]byte(data), &p)
 				fmt.Fprintf(os.Stderr, "\r  %s", dim(fmt.Sprintf("[%d%%] %d subdomains found", p.Pct, p.Found)))
+			} else if lastEvent == "resolve-progress" && !silent {
+				var rp struct {
+					Resolved int `json:"resolved"`
+					Total    int `json:"total"`
+				}
+				json.Unmarshal([]byte(data), &rp)
+				pct := 0
+				if rp.Total > 0 {
+					pct = rp.Resolved * 100 / rp.Total
+				}
+				fmt.Fprintf(os.Stderr, "\r  %s", dim(fmt.Sprintf("[resolving %d%%] %d/%d", pct, rp.Resolved, rp.Total)))
 			} else if lastEvent == "complete" {
 				var comp struct {
 					TotalFound int  `json:"totalFound"`
 					Cached     bool `json:"cached"`
+					Resolved   bool `json:"resolved"`
 					Results    []struct {
-						Subdomain string `json:"subdomain"`
-						Redacted  bool   `json:"redacted"`
+						Subdomain string   `json:"subdomain"`
+						Redacted  bool     `json:"redacted"`
+						A         []string `json:"a"`
+						AAAA      []string `json:"aaaa"`
+						CNAME     []string `json:"cname"`
+						MX        []string `json:"mx"`
+						NS        []string `json:"ns"`
+						TXT       []string `json:"txt"`
+						Live      bool     `json:"live"`
 					} `json:"results"`
 				}
 				json.Unmarshal([]byte(data), &comp)
 				result.Total = comp.TotalFound
 				result.Cached = comp.Cached
+				result.Resolved = comp.Resolved
 				for _, r := range comp.Results {
 					if r.Subdomain != "" && !r.Redacted {
 						result.Subdomains = append(result.Subdomains, r.Subdomain)
+						if comp.Resolved && (len(r.A) > 0 || len(r.AAAA) > 0 || len(r.CNAME) > 0 || len(r.MX) > 0 || len(r.NS) > 0 || len(r.TXT) > 0) {
+							result.DNS[r.Subdomain] = DnsRecord{
+								A: r.A, AAAA: r.AAAA, CNAME: r.CNAME,
+								MX: r.MX, NS: r.NS, TXT: r.TXT, Live: r.Live,
+							}
+						}
 					}
 				}
 			}
@@ -189,6 +243,22 @@ func (c *Client) Scan(domain string) (*ScanResult, error) {
 	if !silent {
 		fmt.Fprintf(os.Stderr, "\r%s\r", strings.Repeat(" ", 60))
 	}
+
+	// Build SubEntries for JSON output
+	for _, sub := range result.Subdomains {
+		entry := SubEntry{Subdomain: sub}
+		if dns, ok := result.DNS[sub]; ok {
+			entry.A = dns.A
+			entry.AAAA = dns.AAAA
+			entry.CNAME = dns.CNAME
+			entry.MX = dns.MX
+			entry.NS = dns.NS
+			entry.TXT = dns.TXT
+			entry.Live = &dns.Live
+		}
+		result.SubEntries = append(result.SubEntries, entry)
+	}
+
 	return result, nil
 }
 
@@ -212,6 +282,7 @@ func usage() {
     submap -dL <file>                  Scan domains from file
     submap -d <domain> -o <file>       Save results to file
     submap -d <domain> -json           Output as JSON
+    submap -d <domain> -resolve         Resolve DNS records (paid plans)
     submap -dL <file> -p 5             Scan 5 domains in parallel
     submap --cached                    List cached domains
     submap --count                     Count subdomains only
@@ -221,6 +292,7 @@ func usage() {
     -dL <file>        File with domains (one per line)
     -o  <file>        Output file (default: stdout)
     -json             JSON output
+    -resolve          Resolve DNS records (A, AAAA, CNAME, MX, NS, TXT)
     -p  <n>           Parallel scans (default: 1, max: 20)
     -silent           Only print subdomains
     -count            Only print count
@@ -287,6 +359,7 @@ func main() {
 	silent = hasFlag(args, "-silent")
 	jsonOut := hasFlag(args, "-json")
 	countOnly := hasFlag(args, "-count")
+	resolve := hasFlag(args, "-resolve")
 
 	host := getArg(args, "-server")
 	if host == "" {
@@ -465,7 +538,7 @@ func main() {
 				fmt.Fprintf(os.Stderr, "  %s\n", cyan(fmt.Sprintf("[%d/%d] %s", num, len(domains), domain)))
 			}
 
-			result, err := client.Scan(domain)
+			result, err := client.Scan(domain, resolve)
 			if err != nil {
 				if !silent {
 					fmt.Fprintf(os.Stderr, "  %s\n", red(fmt.Sprintf("[%d/%d] %s: %v", num, len(domains), domain, err)))
@@ -478,13 +551,40 @@ func main() {
 			} else {
 				if !silent && !jsonOut {
 					label := fmt.Sprintf("%d subdomains", result.Total)
+					if result.Resolved {
+						label += fmt.Sprintf(", %d resolved", len(result.DNS))
+					}
 					fmt.Fprintf(os.Stderr, "  %s\n", green(fmt.Sprintf("[%d/%d] %s — %s", num, len(domains), domain, label)))
 				}
 				if countOnly {
 					write(fmt.Sprintf("%s\t%d", domain, result.Total))
 				} else if !jsonOut {
 					for _, sub := range result.Subdomains {
-						write(sub)
+						line := sub
+						if resolve {
+							if dns, ok := result.DNS[sub]; ok {
+								var parts []string
+								if len(dns.A) > 0 {
+									parts = append(parts, "A:"+strings.Join(dns.A, ","))
+								}
+								if len(dns.AAAA) > 0 {
+									parts = append(parts, "AAAA:"+strings.Join(dns.AAAA, ","))
+								}
+								if len(dns.CNAME) > 0 {
+									parts = append(parts, "CNAME:"+strings.Join(dns.CNAME, ","))
+								}
+								if len(dns.MX) > 0 {
+									parts = append(parts, "MX:"+strings.Join(dns.MX, ","))
+								}
+								if len(dns.NS) > 0 {
+									parts = append(parts, "NS:"+strings.Join(dns.NS, ","))
+								}
+								if len(parts) > 0 {
+									line += "\t" + strings.Join(parts, "\t")
+								}
+							}
+						}
+						write(line)
 					}
 				}
 			}
